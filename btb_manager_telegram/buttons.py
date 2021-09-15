@@ -162,12 +162,12 @@ def current_value():
                 m_list = [
                     f"\nLast update: `{last_update.strftime('%H:%M:%S %d/%m/%Y')}`\n\n"
                     f"*Current coin {current_coin}*\n"
-                    f"\t\- Balance: `{format_float(balance)}` *{current_coin}*\n"
-                    f"\t\- Exchange rate purchased: \n\t\t\t`{format_float(buy_price / alt_amount)}` *{bridge}*/*{current_coin}* \n"
-                    f"\t\- Exchange rate now: \n\t\t\t`{format_float(usd_price)}` *{bridge}*/*{current_coin}*\n"
-                    f"\t\- Change in value: `{round((balance * usd_price - buy_price) / buy_price * 100, 2)}`*%*\n"
-                    f"\t\- Value: `${round(balance * usd_price, 2)}`\n"
-                    f"\t\- Value: `₿{format_float(balance * btc_price)}`\n\n"
+                    f"\t• Balance: `{format_float(balance)}` *{current_coin}*\n"
+                    f"\t• Exchange rate purchased: \n\t\t\t`{format_float(buy_price / alt_amount)}` *{bridge}*/*{current_coin}* \n"
+                    f"\t• Exchange rate now: \n\t\t\t`{format_float(usd_price)}` *{bridge}*/*{current_coin}*\n"
+                    f"\t• Change in value: `{round((balance * usd_price - buy_price) / buy_price * 100, 2)}`*%*\n"
+                    f"\t• Value: `${round(balance * usd_price, 2)}`\n"
+                    f"\t• Value: `₿{format_float(balance * btc_price)}`\n\n"
                     f"_Bought for_ `{round(buy_price, 2)}` *{bridge}*\n"
                     f"_*1 day* value change USD_: `{return_rate_1_day}`*%*\n"
                     f"_*7 day* value change USD_: `{return_rate_7_day}`*%*\n"
@@ -303,10 +303,10 @@ def check_progress():
                     tab = "\t"
                     m_list.append(
                         f"*{coin[0]}*\n"
-                        f"\t\- Amount: `{format_float(coin[1])}` *{coin[0]}*\n"
-                        f"\t\- Price: `${round(coin[2], 2)}`\n"
-                        f"\t\- Change: {f'`{format_float(coin_change)}` *{coin[0]}*{nl}{tab}{tab}{tab}`{round(coin_change / (coin[1] - coin_change) * 100, 2)}` *%* in {time_passed.days} days, {time_passed.seconds // 3600} hours' if coin[3] is not None else f'`{coin[3]}`'}\n"
-                        f"\t\- Trade datetime: `\n\t{last_trade_date}`\n\n".replace(".", "\.")
+                        f"\t• Amount: `{format_float(coin[1])}` *{coin[0]}*\n"
+                        f"\t• Price: `${round(coin[2], 2)}`\n"
+                        f"\t• Change: {f'`{format_float(coin_change)}` *{coin[0]}*{nl}{tab}{tab}{tab}`{round(coin_change / (coin[1] - coin_change) * 100, 2)}`*%* in {time_passed.days} days, {time_passed.seconds // 3600} hours' if coin[3] is not None else f'`{coin[3]}`'}\n"
+                        f"\t• Trade datetime:`\n {last_trade_date}`\n\n".replace(".", "\.")
                     )
 
                 message = telegram_text_truncator(m_list)
@@ -379,8 +379,8 @@ def current_ratios():
                 for coin in query:
                     m_list.append(
                         f"*{coin[1]}*:\n"
-                        f"\t\- Price: `{coin[2]}` {bridge}\n"
-                        f"\t\- Ratio: `{format_float(coin[3])}`\n\n".replace(".", "\.")
+                        f"\t• Price: `{coin[2]}` {bridge}\n"
+                        f"\t• Ratio: `{format_float(coin[3])}`\n\n".replace(".", "\.")
                     )
 
                 message = telegram_text_truncator(m_list)
@@ -433,8 +433,8 @@ def next_coin():
                     percentage = round(coin[3] * 100, 2)
                     m_list.append(
                         f"*{coin[0]} \(`{format_float(percentage)}`%\)*\n"
-                        f"\t\- Current Price: `{format_float(round(coin[1], 8))}` {bridge}\n"
-                        f"\t\- Target Price: `{format_float(round(coin[2], 8))}` {bridge}\n\n".replace(
+                        f"\t• Current Price: `{format_float(round(coin[1], 8))}` {bridge}\n"
+                        f"\t• Target Price: `{format_float(round(coin[2], 8))}` {bridge}\n\n".replace(
                             ".", "\."
                         )
                     )
