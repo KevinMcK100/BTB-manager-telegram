@@ -469,27 +469,68 @@ def next_coin():
                 scout_multiplier = config.get("binance_user_config", "scout_multiplier")
 
             con = sqlite3.connect(db_file_path)
+            con.row_factory = dict_factory
             cur = con.cursor()
 
             # Get prices and percentages for a jump to the next coin
             try:
+                message = []
                 cur.execute(
-                    f"""SELECT p.to_coin_id as other_coin, sh.other_coin_price, (current_coin_price - 0.001 * '{scout_multiplier}' * current_coin_price) / sh.target_ratio AS 'price_needs_to_drop_to', ((current_coin_price - 0.001 * '{scout_multiplier}' * current_coin_price) / sh.target_ratio) / sh.other_coin_price as 'percentage' FROM scout_history sh JOIN pairs p ON p.id = sh.pair_id WHERE p.from_coin_id = (SELECT alt_coin_id FROM trade_history ORDER BY datetime DESC LIMIT 1) ORDER BY sh.datetime DESC, percentage DESC LIMIT (SELECT count(DISTINCT pairs.to_coin_id) FROM pairs JOIN coins ON coins.symbol = pairs.to_coin_id WHERE coins.enabled = 1 AND pairs.from_coin_id=(SELECT alt_coin_id FROM trade_history ORDER BY datetime DESC LIMIT 1));"""
+                    """
+                    SELECT th.alt_coin_id
+                    FROM   trade_history th
+                           JOIN coin_value cv
+                             ON cv.coin_id = th.alt_coin_id
+                    WHERE  cv.balance * cv.usd_price > 10
+                           AND cv.datetime = (SELECT Max(datetime)
+                                              FROM   coin_value)
+                           AND th.id = (SELECT Max(id)
+                                        FROM   trade_history
+                                        WHERE  alt_coin_id = th.alt_coin_id);
+                    """
                 )
-                query = cur.fetchall()
+                active_coins = cur.fetchall()
 
-                m_list = []
-                for coin in query:
-                    percentage = round(coin[3] * 100, 2)
-                    m_list.append(
-                        f"*{coin[0]} \(`{format_float(percentage)}`%\)*\n"
-                        f"\t• Current Price: `{format_float(round(coin[1], 8))}` {bridge}\n"
-                        f"\t• Target Price: `{format_float(round(coin[2], 8))}` {bridge}\n\n".replace(
-                            ".", "\."
-                        )
+                for active_coin in active_coins:
+                    active_coin_id = active_coin['alt_coin_id']
+                    cur.execute(
+                        f"""
+                        SELECT   p.to_coin_id AS other_coin,
+                                 sh.other_coin_price,
+                                 (current_coin_price - 0.00075 * '{scout_multiplier}' * current_coin_price) / sh.target_ratio                         AS 'price_needs_to_drop_to',
+                                 ((current_coin_price - 0.00075 * '{scout_multiplier}' * current_coin_price) / sh.target_ratio) / sh.other_coin_price AS 'percentage'
+                        FROM     scout_history sh
+                        JOIN     pairs p
+                        ON       p.id = sh.pair_id
+                        WHERE    p.from_coin_id = '{active_coin_id}'
+                        ORDER BY sh.datetime DESC,
+                                 percentage DESC limit
+                                 (
+                                          SELECT   count(DISTINCT p.to_coin_id)
+                                          FROM     scout_history sh
+                                          JOIN     pairs AS p
+                                          ON       p.id = sh.pair_id
+                                          JOIN     coins AS c
+                                          ON       c.symbol = p.to_coin_id
+                                          WHERE    p.from_coin_id = '{active_coin_id}'
+                                          AND      c.enabled = 1
+                                          ORDER BY sh.datetime DESC);
+                        """
                     )
+                    query = cur.fetchall()
 
-                message = telegram_text_truncator(m_list)
+                    m_list = [f"Next coin from *{active_coin_id}*\n\n"]
+                    for coin in query:
+                        percentage = round(coin['percentage'] * 100, 2)
+                        m_list.append(
+                            f"*{coin['other_coin']} \(`{format_float(percentage)}`%\)*\n"
+                            f"\t• Current Price: `{format_float(round(coin['other_coin_price'], 8))}` {bridge}\n"
+                            f"\t• Target Price: `{format_float(round(coin['price_needs_to_drop_to'], 8))}` {bridge}\n\n".replace(
+                                ".", "\."
+                            )
+                        )
+
+                    message += telegram_text_truncator(m_list)
                 con.close()
             except Exception as e:
                 logger.error(
