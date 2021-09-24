@@ -16,36 +16,214 @@ from btb_manager_telegram.utils import (
 )
 
 
+def dict_factory(cursor, row):
+    d = {}
+    for idx, col in enumerate(cursor.description):
+        d[col[0]] = row[idx]
+    return d
+
+
 def current_value():
     logger.info("Current value button pressed.")
-
     db_file_path = os.path.join(settings.ROOT_PATH, "data/crypto_trading.db")
-    message = [f"⚠ Unable to find database file at `{db_file_path}`\."]
+    message = []
+
     if os.path.exists(db_file_path):
         try:
             con = sqlite3.connect(db_file_path)
+            con.row_factory = dict_factory
             cur = con.cursor()
 
-            # Get current coin symbol, bridge symbol, order state, order size, initial buying price
+            # Get coin symbol, bridge symbol, order state, order size, initial buying price and current USD value for
+            # each coin with a position size > $10
             try:
                 cur.execute(
-                    """SELECT alt_coin_id, crypto_coin_id, state, alt_trade_amount, crypto_starting_balance, crypto_trade_amount FROM trade_history ORDER BY datetime DESC LIMIT 1;"""
+                    """
+                    SELECT th.id,
+                           th.alt_coin_id,
+                           th.crypto_coin_id,
+                           th.state,
+                           th.alt_trade_amount,
+                           th.crypto_starting_balance,
+                           th.crypto_trade_amount,
+                           th.datetime               AS thdatetime,
+                           cv.balance,
+                           cv.usd_price,
+                           cv.btc_price,
+                           cv.datetime               AS cvdatetime,
+                           cv.balance * cv.usd_price AS current_usd_value
+                    FROM   trade_history th
+                           JOIN coin_value cv
+                             ON cv.coin_id = th.alt_coin_id
+                    WHERE  current_usd_value > 10
+                           AND cv.datetime = (SELECT Max(datetime)
+                                              FROM   coin_value)
+                           AND th.id = (SELECT Max(id)
+                                        FROM   trade_history
+                                        WHERE  alt_coin_id = th.alt_coin_id);
+                    """
                 )
-                (
-                    current_coin,
-                    bridge,
-                    state,
-                    alt_amount,
-                    order_size,
-                    buy_price,
-                ) = cur.fetchone()
-                if current_coin is None:
-                    raise Exception()
-                if state == "ORDERED":
-                    return [
-                        f"A buy order of `{format_float(order_size)}` *{bridge}* is currently placed on coin *{current_coin}*.\n\n"
-                        f"_Waiting for buy order to complete_.".replace(".", "\.")
-                    ]
+                rows = cur.fetchall()
+
+                all_coins = []
+                overall_usd_value = 0.0
+                overall_btc_value = 0.0
+                overall_usd_bought_for = 0.0
+                overall_usd_value_1_day = 0.0
+                overall_usd_value_7_day = 0.0
+                overall_bridge = ''
+
+                for row in rows:
+                    current_coin = row['alt_coin_id']
+                    bridge = row['crypto_coin_id']
+                    order_size = float(row['crypto_starting_balance'])
+                    alt_amount = float(row['alt_trade_amount'])
+                    buy_price = float(row['crypto_trade_amount'])
+                    balance = float(row['balance'])
+                    usd_price = float(row['usd_price'])
+                    btc_price = float(row['btc_price'])
+                    last_update = row['cvdatetime']
+
+                    if current_coin is None:
+                        raise Exception()
+                    if row['state'] == "ORDERED":
+                        return [
+                            f"A buy order of `{format_float(order_size)}` *{bridge}* is currently placed on coin *{current_coin}*.\n\n"
+                            f"_Waiting for buy order to complete_.".replace(".", "\.")
+                        ]
+
+                    try:
+                        cur.execute(
+                            f"""SELECT cv.balance,
+                                       cv.usd_price
+                                FROM   coin_value AS cv
+                                WHERE  cv.coin_id = (SELECT th.alt_coin_id
+                                                     FROM   trade_history AS th
+                                                     WHERE  th.alt_coin_id = '{current_coin}'
+                                                            AND th.datetime > Datetime ('now', '-1 day')
+                                                            AND th.selling = 0
+                                                     ORDER  BY th.datetime ASC
+                                                     LIMIT  1)
+                                       AND cv.datetime > (SELECT th.datetime
+                                                          FROM   trade_history AS th
+                                                          WHERE  th.alt_coin_id = '{current_coin}'
+                                                                 AND th.datetime > Datetime ('now', '-1 day')
+                                                                 AND th.selling = 0
+                                                          ORDER  BY th.datetime ASC
+                                                          LIMIT  1)
+                                ORDER  BY cv.datetime ASC
+                                LIMIT  1; """
+                        )
+                        query_1_day = cur.fetchone()
+
+                        cur.execute(
+                            f"""SELECT cv.balance,
+                                       cv.usd_price
+                                FROM   coin_value AS cv
+                                WHERE  cv.coin_id = (SELECT th.alt_coin_id
+                                                     FROM   trade_history AS th
+                                                     WHERE  th.alt_coin_id = '{current_coin}'
+                                                            AND th.datetime > Datetime ('now', '-7 day')
+                                                            AND th.selling = 0
+                                                     ORDER  BY th.datetime ASC
+                                                     LIMIT  1)
+                                       AND cv.datetime > (SELECT th.datetime
+                                                          FROM   trade_history AS th
+                                                          WHERE  th.alt_coin_id = '{current_coin}'
+                                                                 AND th.datetime > Datetime ('now', '-7 day')
+                                                                 AND th.selling = 0
+                                                          ORDER  BY th.datetime ASC
+                                                          LIMIT  1)
+                                ORDER  BY cv.datetime ASC
+                                LIMIT  1; """
+                        )
+                        query_7_day = cur.fetchone()
+
+                        if balance is None:
+                            balance = 0
+                        if usd_price is None:
+                            usd_price = 0
+                        if btc_price is None:
+                            btc_price = 0
+                        last_update = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S.%f")
+
+                        if (query_1_day is not None
+                                and all(elem is not None for elem in query_1_day)
+                                and usd_price != 0):
+                            balance_1_day = query_1_day['balance']
+                            usd_price_1_day = query_1_day['usd_price']
+                            overall_usd_value_1_day = balance_1_day * usd_price_1_day
+                        if (query_7_day is not None
+                                and all(elem is not None for elem in query_7_day)
+                                and usd_price != 0):
+                            balance_7_day = query_7_day['balance']
+                            usd_price_7_day = query_7_day['usd_price']
+                            overall_usd_value_7_day = balance_7_day * usd_price_7_day
+                    except Exception as e:
+                        logger.error(
+                            f"❌ Unable to fetch current coin information from database: {e}",
+                            exc_info=True,
+                        )
+                        con.close()
+                        return [
+                            "❌ Unable to fetch current coin information from database\.",
+                            "⚠ If you tried using the `Current value` button during a trade please try again after the trade has been completed\.",
+                        ]
+
+                    # Generate message
+                    try:
+                        change_in_value = round((balance * usd_price - buy_price) / buy_price * 100, 2)
+                        usd_value = round(balance * usd_price, 2)
+                        btc_value = balance * btc_price
+                        usd_bought_for = round(buy_price, 2)
+                        m_list = [
+                            f"\nLast update: `{last_update.strftime('%H:%M:%S %d/%m/%Y')}`\n\n"
+                            f"*Current coin {current_coin}*\n"
+                            f"\t• Balance: `{format_float(balance)}` *{current_coin}*\n"
+                            f"\t• Exchange rate purchased: \n\t\t\t`{format_float(buy_price / alt_amount)}` *{bridge}*/*{current_coin}* \n"
+                            f"\t• Exchange rate now: \n\t\t\t`{format_float(usd_price)}` *{bridge}*/*{current_coin}*\n"
+                            f"\t• Bought for: `{usd_bought_for}` *{bridge}*\n"
+                            f"\t• Current value: `${usd_value}`\n"
+                            f"\t• Current value: `₿{format_float(btc_value)}`\n"
+                            f"\t• Change in value: `{change_in_value}`*%*\n"
+                        ]
+                        message += telegram_text_truncator(m_list)
+
+                        all_coins.append(current_coin)
+                        overall_usd_value += usd_value
+                        overall_btc_value += btc_value
+                        overall_usd_bought_for += usd_bought_for
+                        overall_bridge = bridge
+                    except Exception as e:
+                        logger.error(
+                            f"❌ Something went wrong, unable to generate value at this time: {e}",
+                            exc_info=True,
+                        )
+                        con.close()
+                        return [
+                            "❌ Something went wrong, unable to generate value at this time\."
+                        ]
+                percent_change = 0.0
+                return_rate_1_day = 0.0
+                return_rate_7_day = 0.0
+                if overall_usd_bought_for != 0 and overall_usd_value_1_day != 0 and overall_usd_value_7_day != 0:
+                    percent_change = (overall_usd_value - overall_usd_bought_for) / overall_usd_bought_for * 100
+                    return_rate_1_day = round(
+                        (overall_usd_value - overall_usd_value_1_day) / overall_usd_value_1_day * 100, 2
+                    )
+                    return_rate_7_day = round(
+                        (overall_usd_value - overall_usd_value_7_day) / overall_usd_value_7_day * 100, 2
+                    )
+                overall_value = [
+                    f"*All coins: {' & '.join(all_coins)}*\n"
+                    f" • Total value: `${round(overall_usd_value, 2)}`\n"
+                    f" • Total value: `₿{format_float(overall_btc_value)}`\n"
+                    f" • Total bought: `{round(overall_usd_bought_for, 2)}` *{overall_bridge}*\n"
+                    f" • Total value change: `{round(percent_change, 2)}`*%*\n\n"
+                    f"_*1 day* value change USD_: `{return_rate_1_day}`*%*\n"
+                    f"_*7 day* value change USD_: `{return_rate_7_day}`*%*\n"
+                ]
+                message += telegram_text_truncator(overall_value)
             except Exception as e:
                 logger.error(
                     f"❌ Unable to fetch current coin from database: {e}", exc_info=True
@@ -53,141 +231,14 @@ def current_value():
                 con.close()
                 return ["❌ Unable to fetch current coin from database\."]
 
-            # Get balance, current coin price in USD, current coin price in BTC
-            try:
-                cur.execute(
-                    f"""SELECT balance, usd_price, btc_price, datetime
-                        FROM 'coin_value'
-                        WHERE coin_id = '{current_coin}'
-                        ORDER BY datetime DESC LIMIT 1;"""
-                )
-                query = cur.fetchone()
-
-                cur.execute(
-                    """SELECT cv.balance, cv.usd_price
-                        FROM coin_value as cv
-                        WHERE cv.coin_id = (SELECT th.alt_coin_id FROM trade_history as th WHERE th.datetime > DATETIME ('now', '-1 day') AND th.selling = 0 ORDER BY th.datetime ASC LIMIT 1)
-                        AND cv.datetime > (SELECT th.datetime FROM trade_history as th WHERE th.datetime > DATETIME ('now', '-1 day') AND th.selling = 0 ORDER BY th.datetime ASC LIMIT 1)
-                        ORDER BY cv.datetime ASC LIMIT 1;"""
-                )
-                query_1_day = cur.fetchone()
-
-                cur.execute(
-                    """SELECT cv.balance, cv.usd_price
-                        FROM coin_value as cv
-                        WHERE cv.coin_id = (SELECT th.alt_coin_id FROM trade_history as th WHERE th.datetime > DATETIME ('now', '-7 day') AND th.selling = 0 ORDER BY th.datetime ASC LIMIT 1)
-                        AND cv.datetime > (SELECT th.datetime FROM trade_history as th WHERE th.datetime > DATETIME ('now', '-7 day') AND th.selling = 0 ORDER BY th.datetime ASC LIMIT 1)
-                        ORDER BY cv.datetime ASC LIMIT 1;"""
-                )
-                query_7_day = cur.fetchone()
-
-                cur.execute(
-                    """SELECT IFNULL(SUM(usd_amount), 0)
-                        FROM deposits as d
-                        WHERE d.datetime > DATETIME('now', '-1 days')
-                        ORDER BY d.datetime ASC LIMIT 1;"""
-                )
-                query_1_day_deposit = cur.fetchone()
-
-                cur.execute(
-                    """SELECT IFNULL(SUM(usd_amount), 0)
-                        FROM deposits as d
-                        WHERE d.datetime > DATETIME('now', '-7 days')
-                        ORDER BY d.datetime ASC LIMIT 1;"""
-                )
-                query_7_day_deposit = cur.fetchone()
-
-                if query is None:
-                    return [
-                        f"❌ No information about *{current_coin}* available in the database\.",
-                        "⚠ If you tried using the `Current value` button during a trade please try again after the trade has been completed\.",
-                    ]
-
-                balance, usd_price, btc_price, last_update = query
-                if balance is None:
-                    balance = 0
-                if usd_price is None:
-                    usd_price = 0
-                if btc_price is None:
-                    btc_price = 0
-                last_update = datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S.%f")
-
-                return_rate_1_day, return_rate_7_day = 0, 0
-                balance_1_day, usd_price_1_day, balance_7_day, usd_price_7_day = (
-                    0,
-                    0,
-                    0,
-                    0,
-                )
-                deposit_1_day = query_1_day_deposit[0] if query_1_day_deposit[0] else 0
-                deposit_7_day = query_7_day_deposit[0] if query_7_day_deposit[0] else 0
-                if (
-                    query_1_day is not None
-                    and all(elem is not None for elem in query_1_day)
-                    and usd_price != 0
-                ):
-                    balance_1_day, usd_price_1_day = query_1_day
-                    return_rate_1_day = round(
-                        ((balance * usd_price) - deposit_1_day - balance_1_day * usd_price_1_day)
-                        / (balance_1_day * usd_price_1_day)
-                        * 100,
-                        2,
-                    )
-
-                if (
-                    query_7_day is not None
-                    and all(elem is not None for elem in query_7_day)
-                    and usd_price != 0
-                ):
-                    balance_7_day, usd_price_7_day = query_7_day
-                    return_rate_7_day = round(
-                        ((balance * usd_price) - deposit_7_day - balance_7_day * usd_price_7_day)
-                        / (balance_7_day * usd_price_7_day)
-                        * 100,
-                        2,
-                    )
-            except Exception as e:
-                logger.error(
-                    f"❌ Unable to fetch current coin information from database: {e}",
-                    exc_info=True,
-                )
-                con.close()
-                return [
-                    "❌ Unable to fetch current coin information from database\.",
-                    "⚠ If you tried using the `Current value` button during a trade please try again after the trade has been completed\.",
-                ]
-
-            # Generate message
-            try:
-                m_list = [
-                    f"\nLast update: `{last_update.strftime('%H:%M:%S %d/%m/%Y')}`\n\n"
-                    f"*Current coin {current_coin}*\n"
-                    f"\t• Balance: `{format_float(balance)}` *{current_coin}*\n"
-                    f"\t• Exchange rate purchased: \n\t\t\t`{format_float(buy_price / alt_amount)}` *{bridge}*/*{current_coin}* \n"
-                    f"\t• Exchange rate now: \n\t\t\t`{format_float(usd_price)}` *{bridge}*/*{current_coin}*\n"
-                    f"\t• Change in value: `{round((balance * usd_price - buy_price) / buy_price * 100, 2)}`*%*\n"
-                    f"\t• Value: `${round(balance * usd_price, 2)}`\n"
-                    f"\t• Value: `₿{format_float(balance * btc_price)}`\n\n"
-                    f"_Bought for_ `{round(buy_price, 2)}` *{bridge}*\n"
-                    f"_*1 day* value change USD_: `{return_rate_1_day}`*%*\n"
-                    f"_*7 day* value change USD_: `{return_rate_7_day}`*%*\n"
-                ]
-                message = telegram_text_truncator(m_list)
-                con.close()
-            except Exception as e:
-                logger.error(
-                    f"❌ Something went wrong, unable to generate value at this time: {e}",
-                    exc_info=True,
-                )
-                con.close()
-                return [
-                    "❌ Something went wrong, unable to generate value at this time\."
-                ]
+            con.close()
         except Exception as e:
             logger.error(
                 f"❌ Unable to perform actions on the database: {e}", exc_info=True
             )
-            message = ["❌ Unable to perform actions on the database\."]
+    else:
+        message.append(f"⚠ Unable to find database file at `{db_file_path}`\.")
+    print(message)
     return message
 
 
@@ -295,7 +346,6 @@ def check_progress():
                         coin_price = coin[2] / coin[1]
                         deposited_coin_amt = coin[6] / coin_price
                         coin_change -= deposited_coin_amt
-
 
                     time_passed = last_trade_date - pre_last_trade_date
                     last_trade_date = last_trade_date.strftime("%H:%M:%S %d/%m/%Y")
